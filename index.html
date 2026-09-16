@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telegram Circle Recorder</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f5f5;font-family:system-ui;text-align:center}.app{max-width:700px;margin:auto;padding:22px 16px}h1{font-size:22px}.stage{width:min(620px,94vw);aspect-ratio:1;background:#fff;border-radius:18px;margin:auto;display:grid;place-items:center}.circle{width:86%;aspect-ratio:1;border-radius:50%;overflow:hidden;background:#ddd}.circle video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}button{border:0;border-radius:11px;padding:12px 17px;margin:8px 3px;background:#111;color:#fff;font-weight:700}button:disabled{opacity:.45}.secondary{background:#e7e7e7;color:#111}.status{min-height:20px;color:#666;font-size:13px}.small{font-size:11px;color:#777}canvas{display:none}
+</style></head>
+<body><div class="app">
+<h1>Telegram Circle Recorder</h1>
+<p>Camera quality is requested as high as the device allows.</p>
+<div class="stage"><div class="circle"><video id="preview" autoplay muted playsinline></video></div></div>
+<div><button id="start">Start camera</button><button id="record" disabled>● Record</button><button id="stop" class="secondary" disabled>Stop</button><button id="download" class="secondary" disabled>Download MP4</button></div>
+<div id="status" class="status">Camera is off.</div>
+<p class="small">The white background and circular crop are rendered into the recording. MP4 conversion happens locally in the browser.</p>
+<canvas id="canvas"></canvas></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+<script>
+const v=document.getElementById('preview'),start=document.getElementById('start'),rec=document.getElementById('record'),stop=document.getElementById('stop'),dl=document.getElementById('download'),st=document.getElementById('status'),c=document.getElementById('canvas');
+let stream,media,chunks=[],blob,url,raf;
+
+function mime(){return ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(x=>MediaRecorder.isTypeSupported(x))||''}
+start.onclick=async()=>{try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:3840},height:{ideal:2160}},audio:true});v.srcObject=stream;await v.play();st.textContent='Camera ready: '+v.videoWidth+'×'+v.videoHeight;start.disabled=true;rec.disabled=false}catch(e){console.error(e);st.textContent='Camera permission was denied or is unavailable.'}};
+
+function draw(){const S=1080,ctx=c.getContext('2d');c.width=S;c.height=S;ctx.fillStyle='#fff';ctx.fillRect(0,0,S,S);const r=S*.43;ctx.save();ctx.beginPath();ctx.arc(S/2,S/2,r,0,Math.PI*2);ctx.clip();const scale=Math.max((2*r)/v.videoWidth,(2*r)/v.videoHeight),w=v.videoWidth*scale,h=v.videoHeight*scale;ctx.translate(S,0);ctx.scale(-1,1);ctx.drawImage(v,(S-w)/2,(S-h)/2,w,h);ctx.restore();if(media?.state==='recording')raf=requestAnimationFrame(draw)}
+
+rec.onclick=()=>{chunks=[];c.captureStream(30);const composed=c.captureStream(30);const ac=new (AudioContext||webkitAudioContext)(),dest=ac.createMediaStreamDestination(),src=ac.createMediaStreamSource(stream);src.connect(dest);dest.stream.getAudioTracks().forEach(t=>composed.addTrack(t));media=new MediaRecorder(composed,{mimeType:mime(),videoBitsPerSecond:12000000,audioBitsPerSecond:192000});media.ondataavailable=e=>e.data.size&&chunks.push(e.data);media.onstop=()=>{blob=new Blob(chunks,{type:media.mimeType});st.textContent='Recording captured. Converting to MP4…';convert(ac)};media.start(250);draw();rec.disabled=true;stop.disabled=false;st.textContent='Recording…'};
+stop.onclick=()=>{if(media?.state==='recording'){media.stop();cancelAnimationFrame(raf);stop.disabled=true}};
+
+async function convert(ac){try{const {createFFmpeg,fetchFile}=FFmpeg;const ff=createFFmpeg({log:false,corePath:'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.6/dist/ffmpeg-core.js'});await ff.load();ff.FS('writeFile','input.webm',await fetchFile(blob));await ff.run('-i','input.webm','-c:v','libx264','-preset','veryfast','-crf','18','-c:a','aac','-b:a','192k','-pix_fmt','yuv420p','-movflags','+faststart','output.mp4');const data=ff.FS('readFile','output.mp4');const out=new Blob([data.buffer],{type:'video/mp4'});if(url)URL.revokeObjectURL(url);url=URL.createObjectURL(out);dl.onclick=()=>{const a=document.createElement('a');a.href=url;a.download='telegram-circle.mp4';a.click()};dl.disabled=false;st.textContent='MP4 is ready — tap Download MP4.';ac.close()}catch(e){console.error(e);st.textContent='MP4 conversion failed. Check your internet connection and try again.';ac.close()}}
+</script></body></html>
