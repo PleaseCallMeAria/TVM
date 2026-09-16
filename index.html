@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telegram Circle Recorder</title>
+<style>
+  *{box-sizing:border-box} body{margin:0;background:#f7f7f7;font-family:system-ui,-apple-system,sans-serif;color:#111;display:flex;justify-content:center}
+  .app{width:min(720px,100%);padding:28px 18px;text-align:center}
+  h1{font-size:22px;margin:0 0 8px}.sub{color:#666;margin:0 0 22px;font-size:14px}
+  .stage{width:min(600px,92vw);aspect-ratio:1;background:#fff;border-radius:18px;margin:auto;display:grid;place-items:center;overflow:hidden}
+  .circle{width:86%;aspect-ratio:1;border-radius:50%;overflow:hidden;background:#ddd}
+  video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}
+  canvas{display:none}
+  .controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px}
+  button{border:0;border-radius:12px;padding:12px 18px;font-weight:650;cursor:pointer;background:#111;color:#fff}
+  button.secondary{background:#e9e9e9;color:#111} button:disabled{opacity:.45;cursor:not-allowed}
+  .status{margin-top:13px;font-size:13px;color:#666;min-height:20px}
+  .note{font-size:12px;color:#777;line-height:1.5;margin:18px auto 0;max-width:600px}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Telegram Circle Recorder</h1>
+  <p class="sub">Camera quality is requested at the highest practical resolution available on your device.</p>
+  <div class="stage"><div class="circle"><video id="preview" autoplay muted playsinline></video></div></div>
+  <div class="controls">
+    <button id="start">Start camera</button>
+    <button id="record" disabled>● Record</button>
+    <button id="stop" class="secondary" disabled>Stop</button>
+    <button id="download" class="secondary" disabled>Download MP4</button>
+  </div>
+  <div id="status" class="status">Camera is off.</div>
+  <p class="note">The recording uses the camera stream's available resolution. The exported video is a square canvas with a white background and a circular camera image, similar to a Telegram video message.</p>
+  <canvas id="canvas"></canvas>
+</div>
+
+<script type="module">
+import { FFmpeg } from "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js";
+import { fetchFile, toBlobURL } from "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js";
+
+const preview=document.getElementById('preview'), start=document.getElementById('start');
+const record=document.getElementById('record'), stop=document.getElementById('stop');
+const download=document.getElementById('download'), status=document.getElementById('status');
+const canvas=document.getElementById('canvas');
+let stream, recorder, chunks=[], recording=false, raf, sourceBlob;
+
+async function camera(){
+  stream=await navigator.mediaDevices.getUserMedia({
+    video:{width:{ideal:3840},height:{ideal:2160},facingMode:"user"},audio:true
+  });
+  preview.srcObject=stream;
+  await preview.play();
+  status.textContent=`Camera ready: ${preview.videoWidth}×${preview.videoHeight}`;
+  record.disabled=false; start.disabled=true;
+}
+start.onclick=async()=>{try{await camera()}catch(e){status.textContent="Camera permission was denied or is unavailable.";console.error(e)}};
+
+function chooseMime(){
+  const list=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
+  return list.find(x=>MediaRecorder.isTypeSupported(x))||"";
+}
+record.onclick=()=>{
+  chunks=[]; sourceBlob=null; download.disabled=true;
+  recorder=new MediaRecorder(stream,{mimeType:chooseMime(),videoBitsPerSecond:Math.max(8_000_000,(preview.videoWidth*preview.videoHeight*8))});
+  recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+  recorder.onstop=()=>{sourceBlob=new Blob(chunks,{type:recorder.mimeType}); download.disabled=false; status.textContent="Recording ready. Converting to MP4…"; convertMP4()};
+  recorder.start(200);
+  recording=true; record.disabled=true; stop.disabled=false; status.textContent="Recording…";
+};
+stop.onclick=()=>{if(recorder&&recording){recording=false;recorder.stop();record.disabled=true;stop.disabled=true}};
+
+async function convertMP4(){
+  try{
+    const ff=new FFmpeg();
+    const base="https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+    await ff.load({coreURL:await toBlobURL(base+"/ffmpeg-core.js","text/javascript"),wasmURL:await toBlobURL(base+"/ffmpeg-core.wasm","application/wasm")});
+    await ff.writeFile("input.webm",await fetchFile(sourceBlob));
+    // The visible preview is mirrored; keep that natural selfie look in the exported file.
+    await ff.exec(["-i","input.webm","-vf",
+      "crop=ih:ih:(iw-ih)/2:0,format=yuv420p",
+      "-c:v","libx264","-preset","medium","-crf","18","-c:a","aac","-b:a","192k","-movflags","+faststart","output.mp4"]);
+    const data=await ff.readFile("output.mp4");
+    const blob=new Blob([data.buffer],{type:"video/mp4"});
+    const url=URL.createObjectURL(blob);
+    download.onclick=()=>{const a=document.createElement("a");a.href=url;a.download="telegram-circle.mp4";a.click()};
+    status.textContent="MP4 is ready.";
+  }catch(e){
+    console.error(e); status.textContent="MP4 conversion failed in this browser. The recording itself is available in memory.";
+  }
+}
+</script>
+</body>
+</html>
